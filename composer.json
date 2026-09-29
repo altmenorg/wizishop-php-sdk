@@ -1,7 +1,13 @@
 {
     "name": "wizishop/wizishop-php-sdk",
-    "description": "WiziShop API SDK",
-    "keywords": ["wizishop", "wizishop.com", "api", "sdk", "e-commerce"],
+    "description": "WiziShop API v3 PHP SDK — maintained fork",
+    "keywords": [
+        "wizishop",
+        "wizishop.com",
+        "api",
+        "sdk",
+        "e-commerce"
+    ],
     "homepage": "https://api.wizishop.com",
     "license": "MIT",
     "authors": [
@@ -11,13 +17,17 @@
         }
     ],
     "autoload": {
-        "psr-4": { "WiziShop\\SDK\\": "src/" }
+        "psr-4": {
+            "WiziShop\\SDK\\": "src/"
+        }
     },
     "autoload-dev": {
-        "psr-4": { "WiziShop\\SDK\\Tests\\": "tests/" }
+        "psr-4": {
+            "WiziShop\\SDK\\Tests\\": "tests/"
+        }
     },
     "require": {
-        "php": ">=5.5",
+        "php": ">=7.1",
         "guzzlehttp/guzzle": "^6.1"
     },
     "require-dev": {
@@ -28,7 +38,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-master": "1.x-dev"
+            "dev-master": "2.x-dev"
         }
     }
 }
