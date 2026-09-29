@@ -1,5 +1,3 @@
-# DEPRECATED
-
 # WiziShop PHP SDK
 
 A PHP SDK (Software Development Kit) for the WiziShop RESTful API [https://api.wizishop.com](https://api.wizishop.com)

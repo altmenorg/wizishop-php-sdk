@@ -11,7 +11,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     /**
      * @const string SDK version
      */
-    const VERSION = '1.0.8';
+    const VERSION = '1.0.4';
 
     /**
      * @const string API URL (ending with /)
@@ -26,10 +26,9 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function __construct(JWT $jwt, array $config = [])
     {
         $this->jwt = $jwt;
-        $shopId = $jwt->get('id_shop');
+        $shopId = $config["shopid"]; 
         $apiUrl = isset($config['base_uri']) ? $config['base_uri'] : self::API_URL;
         $baseUri = $apiUrl . 'v3/' . ($shopId ? sprintf('shops/%s/', $shopId) : '');
-
         $defaultConfig = [
             'base_uri' => $baseUri,
             'headers' => [
@@ -98,6 +97,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
                 }
             );
         } catch (RequestException $e) {
+            print_r($e->getResponse());
             if (404 == $e->getResponse()->getStatusCode()) { // If no result, the API returns 404
                 return [];
             }
@@ -116,13 +116,8 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     {
         try {
             $response = $this->get($route, $params);
-
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
-            if (404 == $e->getResponse()->getStatusCode()) { // If no result, the API returns 404
-                return [];
-            }
-
             throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
         }
     }
@@ -156,6 +151,35 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         return $this->getAllResultsForRoute('brands', $params);
     }
 
+    /**
+     * @param int $categoryId
+     * @param array $params
+     *
+     * @return array Brand
+     */
+    public function getCategory($catId, array $params = [])
+    {
+        return $this->getSingleResultForRoute(sprintf('categories/%s', $catId), $params);
+    }
+
+    /**
+     * @param array $params
+     *
+     * @return array Categories
+     */
+    public function getCategories(array $params = [])
+    {
+        return $this->getAllResultsForRoute('categories', $params);
+    }
+        /**
+     * @param int $categoryId
+     *
+     * @return array Brand
+     */
+    public function getCategoryProducts($catId, array $params = [])
+    {
+        return $this->getSingleResultForRoute(sprintf('categories/%s/products', $catId));
+    }
     /**
      * @param int $customerId
      * @param array $params
@@ -232,7 +256,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         }
 
         try {
-            $response = $this->patch(sprintf('skus/%s', rawurlencode($sku)), [
+            $response = $this->put(sprintf('skus/%s', rawurlencode($sku)), [
                 'json' => [
                     'method' => $method,
                     'stock' => $stock
@@ -268,7 +292,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
                 $fields['image_url'] = $newImageUrl;
             }
 
-            $response = $this->patch(sprintf('brands/%s', $brandId), [
+            $response = $this->put(sprintf('brands/%s', $brandId), [
                 'json' => $fields
             ]);
 
@@ -351,12 +375,125 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         return $this->getSingleResultForRoute(sprintf('orders/%s', $orderId), $params);
     }
 
+    public function getStats(array $params = [])
+    {
+
+        if (array_key_exists('from_date', $params) && $params['from_date'] instanceof \DateTime) {
+            $params['from_date'] = $params['from_date']->format('Y-m-d H:i:s');
+        }
+
+        if (array_key_exists('to_date', $params) && $params['to_date'] instanceof \DateTime) {
+            $params['to_date'] = $params['to_date']->format('Y-m-d H:i:s');
+        }
+
+
+	// get-stats method seems to be parsed as fuck by wizishop... Standard formats do not work
+	// and using standard way to pass array as parameter is fucked aswell...
+        try {
+            $response = $this->get('order-stats?from_date='.$params['from_date'].'&to_date='.$params['to_date']);
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+
+    }
+
+    public function updateProduct($productId, array $params = [])
+    {
+        try {
+            $response = $this->put(sprintf('products/%s', $productId), [
+                'json' => $params
+            ]);
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }
+    
+    public function createProduct(array $params = [])
+    {
+        try {
+            $response = $this->post('products', [
+                'json' => $params
+            ]);
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }
+
+    public function createOrder(array $params = [])
+    {
+        try {
+            $response = $this->post('orders', [
+                'json' => $params
+            ]);
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }
+
+    public function getProducts(array $params = [])
+    {
+        return $this->getAllResultsForRoute('products', $params);
+    }
+
     /**
      * @param int $orderId Order id
      * @param array $params
      *
-     * @return mixed PDF data to write
+     * @return product objects
+     */    
+    public function getProduct($productId, array $params = [])
+    {
+        return $this->getSingleResultForRoute(sprintf('products/%s', $productId), $params);
+    }
+         
+    /**
+     * @param array $params=(type => flash/discount/new, page => page, limit => limit)
+     *
+     * @return product objects
      */
+    public function getProductSelection(array $params = [])
+    {
+        return $this->getAllResultsForRoute('catalog-selection', $params);
+    }
+
+    /**
+     * @param int $orderId Order id
+     *
+     * @return product object
+     */
+    public function getProductCatalog($productId)
+    {
+        return $this->getAllResultsForRoute('catalog-specific', array("prodIds" => json_encode(array($productId)), "page" => 1, "limit" => 1));
+    }
+
+    /**
+     * @param int $orderId Order id
+     *
+     * @return product object
+     */
+    public function getProductsCatalog($productIds)
+    {
+        return $this->getAllResultsForRoute('catalog-specific', array("prodIds" => json_encode($productIds), "page" => 1, "limit" => 200));
+    }
+
+    /**
+     * @param array $params=(search => search, page => page, limit => limit)
+     *      *
+     * @return product object
+     */
+    public function getProductSearch(array $params = [])
+    {
+        return $this->getAllResultsForRoute('catalog-search', $params);
+    }
+
     public function getInvoiceForOrder($orderId, array $params = [])
     {
         try {
@@ -403,6 +540,24 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     }
 
     /**
+     * Changes order status to "canceled" (status_code: 50)
+     *
+     * @param int $orderId Order id
+     *
+     * @return array Order details with the new status
+     */
+    public function cancelOrder($orderId)
+    {
+        try {
+            $response = $this->put(sprintf('orders/%s/status/cancel', $orderId));
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }
+
+    /**
      * Changes order status to "pending payment" (status_code: 5)
      *
      * @param int $orderId Order id
@@ -412,7 +567,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function pendingPaymentOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/pending_payment', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/pending_payment', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -430,7 +585,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function pendingPaymentVerificationOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/pending_payment_verification', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/pending_payment_verification', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -448,7 +603,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function pendingReplenishmentOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/pending_replenishment', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/pending_replenishment', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -466,7 +621,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function pendingPreparationOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/pending_preparation', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/pending_preparation', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -484,7 +639,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function preparingOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/preparing', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/preparing', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -493,16 +648,16 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     }
 
     /**
-     * Changes order status to "partially sent" (status_code: 29)
+     * Changes order status to "delayed" (status_code: 29)
      *
      * @param int $orderId Order id
      *
      * @return array Order details with the new status
      */
-    public function partiallySentOrder($orderId)
+    public function delayingOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/partially_sent', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/partially_sent', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -529,10 +684,10 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function shipOrder($orderId, array $trackingNumbers)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/ship', $orderId), [
-                'json' => $trackingNumbers
+            $response = $this->put(sprintf('orders/%s/status/ship', $orderId), [
+              'json' => $trackingNumbers
             ]);
-
+            
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
             throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
@@ -549,7 +704,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function deliveredOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/delivered', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/delivered', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -567,7 +722,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function returnOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/return', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/return', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -585,7 +740,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function returnedOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/returned', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/returned', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
@@ -603,11 +758,55 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     public function refundedOrder($orderId)
     {
         try {
-            $response = $this->post(sprintf('orders/%s/refunded', $orderId));
+            $response = $this->put(sprintf('orders/%s/status/refunded', $orderId));
 
             return json_decode($response->getBody(), true);
         } catch (RequestException $e) {
             throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
         }
     }
+
+
+    /**
+     * Sets the order Tag
+     *
+     * @param int $orderId Order id
+     * @param array $tag
+     *                               Example: [
+     *                                   'value' => 'mytag'
+     *                                       ]
+     * @return array Order details with the new status
+     */
+    public function setTag($orderId, array $tag)
+    {
+        try {
+            $response = $this->put(sprintf('orders/%s/tag', $orderId), [
+              'json' => $tag
+            ]);
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }
+
+    /**
+     * Changes order status to custom status
+     *
+     * @param int $orderId Order id
+     * @param int $statusId Status id
+     *
+     * @return array Order details with the new status
+     */    
+    public function customStatusOrder($orderId, $statusId)
+    {
+        try {
+            $response = $this->put(sprintf('orders/%s/custom_status/%s', $orderId, $statusId));
+
+            return json_decode($response->getBody(), true);
+        } catch (RequestException $e) {
+            throw new ApiException($e->getMessage(), $e->getRequest(), $e->getResponse());
+        }
+    }  
+
 }
