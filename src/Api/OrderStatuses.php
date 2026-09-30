@@ -25,8 +25,8 @@ trait OrderStatuses
      * Annulée (50).
      *
      * Wizishop remet alors en stock les déclinaisons réelles de la commande —
-     * y compris celles qu'il n'avait pas débitées, pour une commande créée par
-     * l'API en statut 5.
+     * y compris celles qu'il n'a jamais débitées : une commande créée par
+     * l'API ne l'est pas, quel que soit son statut, ni au passage de 5 à 20.
      */
     public function cancelOrder($orderId)
     {

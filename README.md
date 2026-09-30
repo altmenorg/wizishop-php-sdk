@@ -94,9 +94,10 @@ boutique.
   quand `is_from_tax_excluded` vaut false ; `payment_type` `"2"` donne une
   commande par virement ; une ligne dont le SKU n'existe pas est acceptée, sans
   effet sur aucun stock.
-- **Annulation** : Wizishop remet en stock les vraies déclinaisons d'une
-  commande — y compris celles qu'il n'avait pas débitées, pour une commande
-  créée par l'API en statut 5.
+- **Stock** : une commande créée par l'API n'est jamais débitée, quel que soit
+  son statut de création, ni au passage de 5 à 20 ; son annulation remet
+  pourtant en stock ses vraies déclinaisons. Qui crée des commandes par l'API
+  doit donc débiter lui-même, ou utiliser des SKU inexistants.
 - **Création de client** : genre 1 = femme, 0 = homme ; le champ de date de
   naissance s'écrit bien `bitrhday_date`.
 - **Remise sur commande** (`discounts`, type `advantage`) : montant TTC,
