@@ -3,6 +3,10 @@
 namespace WiziShop\SDK;
 
 use GuzzleHttp\Exception\RequestException;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use Psr\Http\Message\RequestInterface;
+use Psr\Http\Message\ResponseInterface;
 use WiziShop\SDK\Api;
 use WiziShop\SDK\Exception\ApiException;
 use WiziShop\SDK\Model\JWT;
@@ -43,7 +47,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     /**
      * @const string SDK version
      */
-    const VERSION = '2.0.0';
+    const VERSION = '2.1.0';
 
     /**
      * @const string API URL (ending with /)
@@ -56,9 +60,40 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     const PAGE_SIZE = 100;
 
     /**
+     * Relances au plus après un 429 (« Too Many Requests »).
+     */
+    const RETRY_429 = 3;
+
+    /**
+     * Attente maximale demandée par Retry-After, en secondes.
+     */
+    const RETRY_AFTER_MAX = 30;
+
+    /**
      * @var JWT Json Web Token
      */
     private $jwt;
+
+    /**
+     * @var callable|null Rend un JWT neuf (ApiClientFactory : oubli du jeton en cache, nouvelle connexion)
+     */
+    private $reauthenticate;
+
+    /**
+     * @var string|null La dernière requête relancée après reconnexion : un 401
+     *                  qui persiste sur la même requête n'est pas un jeton périmé
+     */
+    private $reauthenticatedRequest;
+
+    /**
+     * @var int
+     */
+    private $maxRetries429;
+
+    /**
+     * @var callable|null function (string $raison, int $tentative, RequestInterface, ResponseInterface)
+     */
+    private $onRetry;
 
     /**
      * @param JWT $jwt
@@ -73,6 +108,22 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         $apiUrl = isset($config['base_uri']) ? $config['base_uri'] : self::API_URL;
         $baseUri = $apiUrl . 'v3/' . ($shopId ? sprintf('shops/%s/', $shopId) : '');
 
+        $this->reauthenticate = isset($config['reauthenticate']) && is_callable($config['reauthenticate']) ? $config['reauthenticate'] : null;
+        $this->maxRetries429 = array_key_exists('retry_429', $config) ? max(0, (int) $config['retry_429']) : self::RETRY_429;
+        $this->onRetry = isset($config['on_retry']) && is_callable($config['on_retry']) ? $config['on_retry'] : null;
+        unset($config['reauthenticate'], $config['retry_429'], $config['on_retry']);
+
+        $handler = isset($config['handler']) && $config['handler'] instanceof HandlerStack ? $config['handler'] : HandlerStack::create();
+        // Poussés après ceux de HandlerStack::create() : ils sont plus près du
+        // transport que http_errors, et voient donc la réponse 429 ou 401 avant
+        // qu'elle ne devienne une exception. Le jeton est posé à l'intérieur de
+        // la relance : une requête relancée après un 401 part avec le nouveau.
+        $handler->push(Middleware::retry([$this, 'shouldRetry'], [$this, 'retryDelay']), 'wizishop_retry');
+        $handler->push(Middleware::mapRequest(function (RequestInterface $request) {
+            return $request->withHeader('Authorization', 'Bearer ' . $this->jwt->getToken());
+        }), 'wizishop_auth');
+        $config['handler'] = $handler;
+
         $defaultConfig = [
             'base_uri' => $baseUri,
             'headers' => [
@@ -82,6 +133,87 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         ];
 
         parent::__construct($defaultConfig + $config);
+    }
+
+    /**
+     * Relance une requête refusée pour excès de débit (429), en respectant
+     * Retry-After, jusqu'à RETRY_429 fois ; et une fois après un 401, si le
+     * client sait se reconnecter (ApiClientFactory le lui donne) : le jeton en
+     * cache a pu être révoqué avant son échéance.
+     *
+     * Une requête refusée en 429 ou 401 n'a pas été traitée : la relancer est
+     * sans danger, même en POST.
+     *
+     * @internal appelé par le middleware Guzzle
+     */
+    public function shouldRetry($retries, RequestInterface $request, ResponseInterface $response = null, $exception = null)
+    {
+        if ($response === null) {
+            return false;
+        }
+
+        $status = $response->getStatusCode();
+
+        if ($status === 429 && $retries < $this->maxRetries429) {
+            $this->notifyRetry('429', $retries + 1, $request, $response);
+
+            return true;
+        }
+
+        if ($status === 401 && $this->reauthenticate !== null && $this->reauthenticatedRequest !== spl_object_hash($request)) {
+            $this->reauthenticatedRequest = spl_object_hash($request);
+            try {
+                $jwt = call_user_func($this->reauthenticate);
+            } catch (\Exception $e) {
+                return false;
+            }
+            if (!$jwt instanceof JWT) {
+                return false;
+            }
+            $this->jwt = $jwt;
+            $this->notifyRetry('401', $retries + 1, $request, $response);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Délai avant une relance, en millisecondes : Retry-After s'il est donné
+     * (plafonné à RETRY_AFTER_MAX), sinon 1, 2, 4 s ; aucun après un 401.
+     *
+     * @internal appelé par le middleware Guzzle
+     */
+    public function retryDelay($retries, ResponseInterface $response = null)
+    {
+        if ($response !== null && $response->getStatusCode() === 401) {
+            return 0;
+        }
+
+        if ($response !== null && $response->hasHeader('Retry-After')) {
+            $value = trim($response->getHeaderLine('Retry-After'));
+            if (ctype_digit($value)) {
+                return 1000 * min((int) $value, self::RETRY_AFTER_MAX);
+            }
+            $date = strtotime($value);
+            if ($date !== false) {
+                return 1000 * max(0, min($date - time(), self::RETRY_AFTER_MAX));
+            }
+        }
+
+        return 1000 * (int) pow(2, max(0, $retries - 1));
+    }
+
+    private function notifyRetry($reason, $attempt, RequestInterface $request, ResponseInterface $response)
+    {
+        if ($this->onRetry !== null) {
+            try {
+                call_user_func($this->onRetry, $reason, $attempt, $request, $response);
+            } catch (\Exception $e) {
+                // Un journal en échec ne doit pas empêcher la relance.
+            }
+        }
     }
 
     /**

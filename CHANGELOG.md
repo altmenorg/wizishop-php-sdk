@@ -1,5 +1,29 @@
 # Journal des changements
 
+## 2.1.0 — 2026-10-09
+
+### Ajouté
+
+- **Relance sur 429** (« Too Many Requests ») : jusqu'à 3 fois, après le délai
+  de `Retry-After` (plafonné à 30 s), ou 1, 2, 4 s à défaut. Une requête refusée
+  en 429 n'a pas été traitée : la relance vaut aussi pour un POST. Réglage
+  `retry_429` (0 pour aucune). Jusqu'ici, un 429 levait aussitôt une
+  `ApiException`, et l'appelant perdait l'opération.
+- **Reconnexion sur 401** : un client créé par `ApiClientFactory::authenticate()`
+  oublie le jeton en cache, se reconnecte et relance la requête, une fois par
+  requête. Un jeton révoqué avant son échéance restait servi par le cache
+  jusqu'à 24 h. Un client construit à la main (sans moyen de se reconnecter)
+  garde l'ancien comportement.
+- Réglage `on_retry` : appelé à chaque relance (`'429'` ou `'401'`, tentative,
+  requête, réponse), pour la journaliser.
+
+### Vérifié
+
+- `tests/regression/retry.php` : 17 cas (429, 401, et ce qui ne doit pas être
+  relancé : 404, 500).
+- `tests/regression/mock.php` et `live.php` (lecture sur la vraie boutique) :
+  sorties identiques, octet pour octet, à la 2.0.0.
+
 ## 2.0.0 — 2026-09-29
 
 Refonte d'une version modifiée du SDK officiel, utilisée en production (voir

@@ -22,6 +22,8 @@ class ApiClientFactory
      *                      - shopid : identifiant de la boutique (sinon, celui du jeton)
      *                      - token_cache : false pour se reconnecter à chaque appel
      *                      - token_cache_root : répertoire du cache (défaut : répertoire temporaire)
+     *                      - retry_429 : relances au plus après un 429 (défaut 3, 0 pour aucune)
+     *                      - on_retry : function ($raison, $tentative, $requête, $réponse), à chaque relance
      *
      * @return AuthenticatedApiClient
      *
@@ -60,6 +62,19 @@ class ApiClientFactory
                 $cache->set($cacheKey, $jwt->getToken(), self::TOKEN_CACHE_TTL);
             }
         }
+
+        // Après un 401, le client oublie le jeton en cache et se reconnecte une
+        // fois avant de relancer la requête (AuthenticatedApiClient::shouldRetry).
+        $apiUrl = isset($config['base_uri']) ? $config['base_uri'] : null;
+        $config['reauthenticate'] = function () use ($username, $password, $apiUrl, $useCache, $cache, $cacheKey) {
+            $cache->remove($cacheKey);
+            $jwt = self::login($username, $password, $apiUrl);
+            if ($useCache) {
+                $cache->set($cacheKey, $jwt->getToken(), self::TOKEN_CACHE_TTL);
+            }
+
+            return $jwt;
+        };
 
         return new AuthenticatedApiClient($jwt, $config);
     }
