@@ -1,5 +1,32 @@
 # Journal des changements
 
+## 2.2.0 — 2026-10-09
+
+### Ajouté
+
+- **Délais par défaut** : 5 s pour se connecter, 20 s pour une requête entière
+  (connexion à l'API comprise), réglables par `connect_timeout` et `timeout`.
+  Sans eux, Guzzle attend indéfiniment : une API qui ne répondait plus bloquait
+  chaque page jusqu'au délai du serveur web, et les workers PHP s'épuisaient.
+- **Coupe-circuit** (`CircuitBreaker`), pour les clients de
+  `ApiClientFactory::authenticate()` : une requête sans réponse (délai,
+  connexion) ou en 502/503/504 l'ouvre pour 60 s, partagé entre tous les
+  processus de la machine (un fichier à côté du cache du jeton). Ouvert, chaque
+  requête — et la connexion — échoue aussitôt par `ApiUnavailableException`
+  (sous-classe d'`ApiException`, avec `getDownSince()`), sans attendre. Passé
+  60 s, une requête part : réponse reçue, il se ferme ; échec, il se rouvre, en
+  gardant l'heure de début de la panne. Un 500 ou un 4xx ne l'ouvre pas.
+  `circuit_breaker => false` pour s'en passer ; un client construit à la main
+  n'en a pas.
+- `ApiClientFactory::apiDownSince()` : depuis quand l'API est en panne, sans
+  aucune requête — pour afficher un bandeau.
+
+### Vérifié
+
+- `tests/regression/breaker.php` : 21 cas, dont les deux délais en vrai (5,0 s
+  et 20,0 s).
+- `retry.php` inchangé ; `mock.php` identique à la 2.0.0.
+
 ## 2.1.0 — 2026-10-09
 
 ### Ajouté

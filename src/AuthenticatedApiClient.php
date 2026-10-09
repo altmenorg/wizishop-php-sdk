@@ -5,10 +5,12 @@ namespace WiziShop\SDK;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
+use GuzzleHttp\Promise\RejectedPromise;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use WiziShop\SDK\Api;
 use WiziShop\SDK\Exception\ApiException;
+use WiziShop\SDK\Exception\ApiUnavailableException;
 use WiziShop\SDK\Model\JWT;
 
 /**
@@ -47,7 +49,7 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     /**
      * @const string SDK version
      */
-    const VERSION = '2.1.0';
+    const VERSION = '2.2.0';
 
     /**
      * @const string API URL (ending with /)
@@ -58,6 +60,12 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
      * Taille de page utilisée pour rassembler une liste complète.
      */
     const PAGE_SIZE = 100;
+
+    /**
+     * Délais par défaut, en secondes : connexion, puis requête entière.
+     */
+    const CONNECT_TIMEOUT = 5;
+    const TIMEOUT = 20;
 
     /**
      * Relances au plus après un 429 (« Too Many Requests »).
@@ -91,6 +99,11 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
     private $maxRetries429;
 
     /**
+     * @var CircuitBreaker|null Donné par ApiClientFactory ; absent pour un client construit à la main
+     */
+    private $breaker;
+
+    /**
      * @var callable|null function (string $raison, int $tentative, RequestInterface, ResponseInterface)
      */
     private $onRetry;
@@ -111,9 +124,21 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         $this->reauthenticate = isset($config['reauthenticate']) && is_callable($config['reauthenticate']) ? $config['reauthenticate'] : null;
         $this->maxRetries429 = array_key_exists('retry_429', $config) ? max(0, (int) $config['retry_429']) : self::RETRY_429;
         $this->onRetry = isset($config['on_retry']) && is_callable($config['on_retry']) ? $config['on_retry'] : null;
-        unset($config['reauthenticate'], $config['retry_429'], $config['on_retry']);
+        $this->breaker = isset($config['circuit_breaker']) && $config['circuit_breaker'] instanceof CircuitBreaker ? $config['circuit_breaker'] : null;
+        unset($config['reauthenticate'], $config['retry_429'], $config['on_retry'], $config['circuit_breaker']);
+
+        // Sans délai, Guzzle attend indéfiniment : une API qui ne répond plus
+        // bloquait chaque page jusqu'au délai du serveur web (20 min), et les
+        // workers PHP s'épuisaient. Un appelant peut fixer les siens.
+        $config += ['connect_timeout' => self::CONNECT_TIMEOUT, 'timeout' => self::TIMEOUT];
 
         $handler = isset($config['handler']) && $config['handler'] instanceof HandlerStack ? $config['handler'] : HandlerStack::create();
+        // Le coupe-circuit, avant la relance : il voit l'issue finale d'une requête.
+        $handler->push(function (callable $next) {
+            return function (RequestInterface $request, array $options) use ($next) {
+                return $this->guard($next, $request, $options);
+            };
+        }, 'wizishop_breaker');
         // Poussés après ceux de HandlerStack::create() : ils sont plus près du
         // transport que http_errors, et voient donc la réponse 429 ou 401 avant
         // qu'elle ne devienne une exception. Le jeton est posé à l'intérieur de
@@ -133,6 +158,44 @@ class AuthenticatedApiClient extends \GuzzleHttp\Client
         ];
 
         parent::__construct($defaultConfig + $config);
+    }
+
+    /**
+     * Coupe-circuit (CircuitBreaker) : ouvert, la requête échoue aussitôt ; sinon
+     * elle part, et son issue ouvre ou ferme le circuit. Seuls comptent ce qui dit
+     * l'API absente — pas de réponse (délai, connexion), 502, 503, 504 — et non un
+     * 500 ponctuel d'un point d'accès, ni un 4xx.
+     */
+    private function guard(callable $next, RequestInterface $request, array $options)
+    {
+        if ($this->breaker === null) {
+            return $next($request, $options);
+        }
+
+        $since = $this->breaker->openSince();
+        if ($since !== null) {
+            return new RejectedPromise(new ApiUnavailableException(
+                sprintf("L'API Wizishop ne répond pas depuis %s.", date('H:i', $since)), $request, null, null, $since));
+        }
+
+        return $next($request, $options)->then(
+            function (ResponseInterface $response) {
+                if (in_array($response->getStatusCode(), [502, 503, 504], true)) {
+                    $this->breaker->trip();
+                } else {
+                    $this->breaker->reset();
+                }
+
+                return $response;
+            },
+            function ($reason) {
+                if ($reason instanceof RequestException && !$reason->hasResponse()) {
+                    $this->breaker->trip();
+                }
+
+                return new RejectedPromise($reason);
+            }
+        );
     }
 
     /**
